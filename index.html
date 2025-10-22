@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dirt Rally Racing</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+            background: #1a1a1a;
+        }
+
+        #gameCanvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+            background: linear-gradient(to bottom, #87CEEB 0%, #E0F6FF 50%, #8B7355 50%, #A0826D 100%);
+        }
+
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-size: 18px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            z-index: 10;
+            background: rgba(0,0,0,0.5);
+            padding: 15px;
+            border-radius: 10px;
+        }
+
+        #speedometer {
+            position: absolute;
+            bottom: 30px;
+            right: 30px;
+            color: white;
+            font-size: 32px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+            background: rgba(0,0,0,0.7);
+            padding: 20px 30px;
+            border-radius: 15px;
+            border: 3px solid #ff6600;
+        }
+
+        #instructions {
+            position: absolute;
+            bottom: 30px;
+            left: 30px;
+            color: white;
+            font-size: 14px;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+            background: rgba(0,0,0,0.6);
+            padding: 10px;
+            border-radius: 8px;
+        }
+
+        .minimap {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 200px;
+            height: 200px;
+            background: rgba(0,0,0,0.7);
+            border: 2px solid #fff;
+            border-radius: 10px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="ui">
+        <div>Time: <span id="time">0:00</span></div>
+        <div>Position: <span id="position">0, 0</span></div>
+        <div>FPS: <span id="fps">60</span></div>
+    </div>
+
+    <div id="speedometer">
+        <span id="speed">0</span> KM/H
+    </div>
+
+    <div id="instructions">
+        ⬆️ W/↑ - Accelerate<br>
+        ⬇️ S/↓ - Brake/Reverse<br>
+        ⬅️ A/← - Turn Left<br>
+        ➡️ D/→ - Turn Right<br>
+        SPACE - Handbrake
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Set canvas size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // Game state
+        const keys = {};
+        let gameTime = 0;
+        let lastFrameTime = Date.now();
+        let fps = 60;
+        let fpsCounter = 0;
+        let lastFpsUpdate = Date.now();
+
+        // Camera
+        const camera = {
+            x: 0,
+            y: 0,
+            zoom: 1
+        };
+
+        // Car physics
+        const car = {
+            x: canvas.width / 2,
+            y: canvas.height / 2,
+            width: 40,
+            height: 70,
+            angle: 0,
+            speed: 0,
+            maxSpeed: 15,
+            acceleration: 0.3,
+            deceleration: 0.15,
+            turnSpeed: 0.05,
+            drift: 0,
+            wheelAngle: 0
+        };
+
+        // Terrain objects
+        const terrain = {
+            trees: [],
+            rocks: [],
+            dirtPatches: []
+        };
+
+        // Generate terrain
+        function generateTerrain() {
+            const mapSize = 3000;
+            const numTrees = 80;
+            const numRocks = 100;
+            const numDirtPatches = 150;
+
+            // Generate trees
+            for (let i = 0; i < numTrees; i++) {
+                terrain.trees.push({
+                    x: Math.random() * mapSize - mapSize / 2,
+                    y: Math.random() * mapSize - mapSize / 2,
+                    radius: 20 + Math.random() * 30,
+                    type: Math.floor(Math.random() * 3)
+                });
+            }
+
+            // Generate rocks
+            for (let i = 0; i < numRocks; i++) {
+                terrain.rocks.push({
+                    x: Math.random() * mapSize - mapSize / 2,
+                    y: Math.random() * mapSize - mapSize / 2,
+                    width: 15 + Math.random() * 40,
+                    height: 15 + Math.random() * 40,
+                    angle: Math.random() * Math.PI * 2
+                });
+            }
+
+            // Generate dirt patches
+            for (let i = 0; i < numDirtPatches; i++) {
+                terrain.dirtPatches.push({
+                    x: Math.random() * mapSize - mapSize / 2,
+                    y: Math.random() * mapSize - mapSize / 2,
+                    width: 50 + Math.random() * 100,
+                    height: 50 + Math.random() * 100,
+                    darkness: Math.random() * 0.3
+                });
+            }
+        }
+
+        // Initialize
+        generateTerrain();
+
+        // Input handling
+        window.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            if (e.key === ' ') e.preventDefault();
+        });
+
+        window.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        // Draw car with 3D-like appearance
+        function drawCar() {
+            ctx.save();
+            ctx.translate(canvas.width / 2, canvas.height / 2);
+            ctx.rotate(car.angle);
+
+            // Shadow
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillRect(-car.width / 2 + 5, -car.height / 2 + 5, car.width, car.height);
+
+            // Car body - main
+            const gradient = ctx.createLinearGradient(-car.width / 2, 0, car.width / 2, 0);
+            gradient.addColorStop(0, '#cc0000');
+            gradient.addColorStop(0.5, '#ff0000');
+            gradient.addColorStop(1, '#cc0000');
+            ctx.fillStyle = gradient;
+            ctx.fillRect(-car.width / 2, -car.height / 2, car.width, car.height);
+
+            // Car roof
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(-car.width / 2 + 5, -car.height / 2 + 15, car.width - 10, car.height / 3);
+
+            // Windows
+            ctx.fillStyle = '#4a7c8a';
+            ctx.fillRect(-car.width / 2 + 8, -car.height / 2 + 18, car.width - 16, 12);
+
+            // Hood details
+            ctx.strokeStyle = '#990000';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(-10, -car.height / 2 + 5);
+            ctx.lineTo(-10, -car.height / 2 + 30);
+            ctx.moveTo(10, -car.height / 2 + 5);
+            ctx.lineTo(10, -car.height / 2 + 30);
+            ctx.stroke();
+
+            // Front wheels
+            drawWheel(-car.width / 2 - 3, -car.height / 2 + 10, car.wheelAngle);
+            drawWheel(car.width / 2 + 3, -car.height / 2 + 10, car.wheelAngle);
+
+            // Rear wheels
+            drawWheel(-car.width / 2 - 3, car.height / 2 - 10, 0);
+            drawWheel(car.width / 2 + 3, car.height / 2 - 10, 0);
+
+            // Headlights
+            ctx.fillStyle = '#ffff00';
+            ctx.fillRect(-car.width / 2 + 3, -car.height / 2 + 2, 10, 5);
+            ctx.fillRect(car.width / 2 - 13, -car.height / 2 + 2, 10, 5);
+
+            // Tail lights
+            ctx.fillStyle = '#ff0000';
+            ctx.fillRect(-car.width / 2 + 3, car.height / 2 - 7, 10, 5);
+            ctx.fillRect(car.width / 2 - 13, car.height / 2 - 7, 10, 5);
+
+            // Racing stripes
+            ctx.fillStyle = 'white';
+            ctx.fillRect(-5, -car.height / 2, 10, car.height);
+
+            // Spoiler
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(-car.width / 2, car.height / 2, car.width, 5);
+
+            ctx.restore();
+        }
+
+        function drawWheel(x, y, angle) {
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(angle);
+
+            // Tire
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(-6, -10, 12, 20);
+
+            // Rim
+            ctx.fillStyle = '#888';
+            ctx.fillRect(-4, -8, 8, 16);
+
+            // Rim details
+            ctx.fillStyle = '#aaa';
+            ctx.fillRect(-3, -6, 6, 3);
+            ctx.fillRect(-3, 0, 6, 3);
+
+            ctx.restore();
+        }
+
+        // Draw terrain
+        function drawTerrain() {
+            // Ground base
+            ctx.fillStyle = '#8B7355';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Dirt patches
+            terrain.dirtPatches.forEach(patch => {
+                const screenX = patch.x - camera.x + canvas.width / 2;
+                const screenY = patch.y - camera.y + canvas.height / 2;
+
+                if (screenX > -patch.width && screenX < canvas.width + patch.width &&
+                    screenY > -patch.height && screenY < canvas.height + patch.height) {
+
+                    ctx.fillStyle = `rgba(101, 67, 33, ${0.3 + patch.darkness})`;
+                    ctx.beginPath();
+                    ctx.ellipse(screenX, screenY, patch.width, patch.height, 0, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Add texture
+                    for (let i = 0; i < 5; i++) {
+                        ctx.fillStyle = `rgba(90, 60, 30, ${0.2 + patch.darkness})`;
+                        ctx.fillRect(
+                            screenX + (Math.random() - 0.5) * patch.width,
+                            screenY + (Math.random() - 0.5) * patch.height,
+                            3, 3
+                        );
+                    }
+                }
+            });
+
+            // Rocks
+            terrain.rocks.forEach(rock => {
+                const screenX = rock.x - camera.x + canvas.width / 2;
+                const screenY = rock.y - camera.y + canvas.height / 2;
+
+                if (screenX > -rock.width && screenX < canvas.width + rock.width &&
+                    screenY > -rock.height && screenY < canvas.height + rock.height) {
+
+                    ctx.save();
+                    ctx.translate(screenX, screenY);
+                    ctx.rotate(rock.angle);
+
+                    // Rock shadow
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                    ctx.beginPath();
+                    ctx.ellipse(3, 3, rock.width / 2, rock.height / 3, 0, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Rock body
+                    const rockGradient = ctx.createRadialGradient(0, 0, 0, 0, 0, rock.width / 2);
+                    rockGradient.addColorStop(0, '#9a9a9a');
+                    rockGradient.addColorStop(1, '#5a5a5a');
+                    ctx.fillStyle = rockGradient;
+
+                    ctx.beginPath();
+                    ctx.moveTo(-rock.width / 2, 0);
+                    ctx.lineTo(-rock.width / 4, -rock.height / 2);
+                    ctx.lineTo(rock.width / 4, -rock.height / 2);
+                    ctx.lineTo(rock.width / 2, 0);
+                    ctx.lineTo(rock.width / 4, rock.height / 2);
+                    ctx.lineTo(-rock.width / 4, rock.height / 2);
+                    ctx.closePath();
+                    ctx.fill();
+
+                    // Rock highlights
+                    ctx.fillStyle = 'rgba(200, 200, 200, 0.3)';
+                    ctx.beginPath();
+                    ctx.moveTo(-rock.width / 4, -rock.height / 2);
+                    ctx.lineTo(0, -rock.height / 3);
+                    ctx.lineTo(rock.width / 4, -rock.height / 2);
+                    ctx.fill();
+
+                    ctx.restore();
+                }
+            });
+
+            // Trees
+            terrain.trees.forEach(tree => {
+                const screenX = tree.x - camera.x + canvas.width / 2;
+                const screenY = tree.y - camera.y + canvas.height / 2;
+
+                if (screenX > -tree.radius * 2 && screenX < canvas.width + tree.radius * 2 &&
+                    screenY > -tree.radius * 2 && screenY < canvas.height + tree.radius * 2) {
+
+                    // Tree shadow
+                    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                    ctx.beginPath();
+                    ctx.ellipse(screenX + 5, screenY + tree.radius + 5, tree.radius * 0.3, tree.radius * 0.15, 0, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    // Trunk
+                    ctx.fillStyle = '#4a2511';
+                    ctx.fillRect(screenX - tree.radius * 0.15, screenY, tree.radius * 0.3, tree.radius);
+
+                    // Trunk highlight
+                    ctx.fillStyle = '#6a3521';
+                    ctx.fillRect(screenX - tree.radius * 0.15, screenY, tree.radius * 0.1, tree.radius);
+
+                    // Foliage (multiple layers for depth)
+                    const foliageColors = ['#2d5016', '#3a6b1f', '#4a7c28'];
+
+                    for (let i = 2; i >= 0; i--) {
+                        ctx.fillStyle = foliageColors[i];
+                        ctx.beginPath();
+
+                        if (tree.type === 0) {
+                            // Pine tree
+                            ctx.moveTo(screenX, screenY - tree.radius * 0.3 * (i + 1));
+                            ctx.lineTo(screenX - tree.radius * (0.8 - i * 0.2), screenY + tree.radius * 0.3 * i);
+                            ctx.lineTo(screenX + tree.radius * (0.8 - i * 0.2), screenY + tree.radius * 0.3 * i);
+                        } else if (tree.type === 1) {
+                            // Round tree
+                            ctx.arc(screenX, screenY - tree.radius * 0.3, tree.radius * (0.9 - i * 0.1), 0, Math.PI * 2);
+                        } else {
+                            // Bushy tree
+                            ctx.ellipse(screenX, screenY - tree.radius * 0.2, tree.radius * (0.85 - i * 0.1), tree.radius * (0.7 - i * 0.1), 0, 0, Math.PI * 2);
+                        }
+
+                        ctx.fill();
+                    }
+
+                    // Foliage highlights
+                    ctx.fillStyle = 'rgba(100, 150, 50, 0.3)';
+                    ctx.beginPath();
+                    ctx.arc(screenX - tree.radius * 0.3, screenY - tree.radius * 0.5, tree.radius * 0.2, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            });
+        }
+
+        // Draw dust particles
+        const dustParticles = [];
+        function createDust() {
+            if (Math.abs(car.speed) > 2) {
+                for (let i = 0; i < 2; i++) {
+                    dustParticles.push({
+                        x: car.x - Math.cos(car.angle) * car.height / 2,
+                        y: car.y - Math.sin(car.angle) * car.height / 2,
+                        vx: (Math.random() - 0.5) * 2 - Math.cos(car.angle) * car.speed * 0.5,
+                        vy: (Math.random() - 0.5) * 2 - Math.sin(car.angle) * car.speed * 0.5,
+                        life: 1,
+                        size: 3 + Math.random() * 4
+                    });
+                }
+            }
+        }
+
+        function updateDust() {
+            for (let i = dustParticles.length - 1; i >= 0; i--) {
+                const p = dustParticles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.02;
+                p.vx *= 0.95;
+                p.vy *= 0.95;
+
+                if (p.life <= 0) {
+                    dustParticles.splice(i, 1);
+                }
+            }
+        }
+
+        function drawDust() {
+            dustParticles.forEach(p => {
+                const screenX = p.x - camera.x + canvas.width / 2;
+                const screenY = p.y - camera.y + canvas.height / 2;
+
+                ctx.fillStyle = `rgba(139, 115, 85, ${p.life * 0.5})`;
+                ctx.beginPath();
+                ctx.arc(screenX, screenY, p.size * p.life, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        // Collision detection
+        function checkCollisions() {
+            const carFrontX = car.x + Math.cos(car.angle) * car.height / 2;
+            const carFrontY = car.y + Math.sin(car.angle) * car.height / 2;
+
+            // Check trees
+            terrain.trees.forEach(tree => {
+                const dx = carFrontX - tree.x;
+                const dy = carFrontY - tree.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < tree.radius * 0.5) {
+                    car.speed *= 0.5;
+                    // Bounce back
+                    const bounceAngle = Math.atan2(dy, dx);
+                    car.x += Math.cos(bounceAngle) * 3;
+                    car.y += Math.sin(bounceAngle) * 3;
+                }
+            });
+
+            // Check rocks
+            terrain.rocks.forEach(rock => {
+                const dx = carFrontX - rock.x;
+                const dy = carFrontY - rock.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+
+                if (distance < rock.width / 2) {
+                    car.speed *= 0.6;
+                    const bounceAngle = Math.atan2(dy, dx);
+                    car.x += Math.cos(bounceAngle) * 2;
+                    car.y += Math.sin(bounceAngle) * 2;
+                }
+            });
+        }
+
+        // Update car physics
+        function updateCar() {
+            // Acceleration
+            if (keys['w'] || keys['arrowup']) {
+                car.speed = Math.min(car.speed + car.acceleration, car.maxSpeed);
+            }
+
+            // Braking/Reverse
+            if (keys['s'] || keys['arrowdown']) {
+                if (car.speed > 0) {
+                    car.speed = Math.max(car.speed - car.acceleration * 1.5, -car.maxSpeed / 2);
+                } else {
+                    car.speed = Math.max(car.speed - car.acceleration * 0.5, -car.maxSpeed / 2);
+                }
+            }
+
+            // Natural deceleration
+            if (!keys['w'] && !keys['arrowup'] && !keys['s'] && !keys['arrowdown']) {
+                if (car.speed > 0) {
+                    car.speed = Math.max(car.speed - car.deceleration, 0);
+                } else if (car.speed < 0) {
+                    car.speed = Math.min(car.speed + car.deceleration, 0);
+                }
+            }
+
+            // Steering
+            const turnEfficiency = Math.min(Math.abs(car.speed) / car.maxSpeed, 1);
+
+            if (keys['a'] || keys['arrowleft']) {
+                car.wheelAngle = Math.max(car.wheelAngle - 0.1, -0.5);
+                if (Math.abs(car.speed) > 0.5) {
+                    car.angle -= car.turnSpeed * turnEfficiency * (car.speed > 0 ? 1 : -1);
+                }
+            } else if (keys['d'] || keys['arrowright']) {
+                car.wheelAngle = Math.min(car.wheelAngle + 0.1, 0.5);
+                if (Math.abs(car.speed) > 0.5) {
+                    car.angle += car.turnSpeed * turnEfficiency * (car.speed > 0 ? 1 : -1);
+                }
+            } else {
+                // Return wheels to center
+                car.wheelAngle *= 0.8;
+            }
+
+            // Handbrake
+            if (keys[' ']) {
+                car.speed *= 0.95;
+                car.drift += 0.05;
+            } else {
+                car.drift *= 0.9;
+            }
+
+            // Apply drift effect
+            if (Math.abs(car.drift) > 0.01) {
+                car.angle += car.drift * car.speed * 0.01;
+            }
+
+            // Update position
+            car.x += Math.cos(car.angle) * car.speed;
+            car.y += Math.sin(car.angle) * car.speed;
+
+            // Check collisions
+            checkCollisions();
+
+            // Update camera
+            camera.x = car.x;
+            camera.y = car.y;
+        }
+
+        // Update UI
+        function updateUI() {
+            // Time
+            const minutes = Math.floor(gameTime / 60);
+            const seconds = Math.floor(gameTime % 60);
+            document.getElementById('time').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+
+            // Position
+            document.getElementById('position').textContent = `${Math.round(car.x)}, ${Math.round(car.y)}`;
+
+            // Speed
+            const speedKmh = Math.round(Math.abs(car.speed) * 10);
+            document.getElementById('speed').textContent = speedKmh;
+
+            // FPS
+            fpsCounter++;
+            const now = Date.now();
+            if (now - lastFpsUpdate > 1000) {
+                fps = fpsCounter;
+                document.getElementById('fps').textContent = fps;
+                fpsCounter = 0;
+                lastFpsUpdate = now;
+            }
+        }
+
+        // Main game loop
+        function gameLoop() {
+            const now = Date.now();
+            const deltaTime = (now - lastFrameTime) / 1000;
+            lastFrameTime = now;
+            gameTime += deltaTime;
+
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw sky
+            const skyGradient = ctx.createLinearGradient(0, 0, 0, canvas.height / 2);
+            skyGradient.addColorStop(0, '#87CEEB');
+            skyGradient.addColorStop(1, '#E0F6FF');
+            ctx.fillStyle = skyGradient;
+            ctx.fillRect(0, 0, canvas.width, canvas.height / 2);
+
+            // Draw terrain
+            drawTerrain();
+
+            // Draw dust
+            drawDust();
+
+            // Draw car
+            drawCar();
+
+            // Update
+            updateCar();
+            createDust();
+            updateDust();
+            updateUI();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Start game
+        gameLoop();
+    </script>
+</body>
+</html>
